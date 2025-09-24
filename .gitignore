@@ -1,0 +1,31 @@
+# Arduino build artifacts
+*.elf
+*.hex
+*.bin
+*.lst
+*.map
+*.o
+*.d
+*.s
+*.sym
+*.su
+
+# Arduino IDE specific files
+build/
+.arduino/
+*.ino.hex
+*.ino.elf
+*.ino.bin
+*.ino.lst
+*.ino.map
+
+# PlatformIO specific files (if used)
+.pio/
+.vscode/ # If you're using VS Code with PlatformIO, you might want to ignore its settings
+
+# Other common files to ignore
+.DS_Store # macOS specific
+Thumb.db # Windows specific
+*~ # Backup files
+*.bak # Backup files
+*.log # Log files

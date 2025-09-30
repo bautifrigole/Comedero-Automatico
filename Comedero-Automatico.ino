@@ -1,4 +1,4 @@
-//é#include "thingProperties.h"
+//#include "thingProperties.h"
 
 #define SWITCH_PIN 27   // Switch conectado al GPIO27
 #define RELAY_PIN 12    // Pin GPIO 12 conectado al IN del relay

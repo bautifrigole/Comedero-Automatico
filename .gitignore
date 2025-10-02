@@ -29,3 +29,6 @@ Thumb.db # Windows specific
 *~ # Backup files
 *.bak # Backup files
 *.log # Log files
+
+*/node_modules/
+.DS_Store

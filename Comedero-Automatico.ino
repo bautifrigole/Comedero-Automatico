@@ -22,7 +22,7 @@ void setup() {
   // Configuración de pines
   pinMode(SWITCH_PIN, INPUT_PULLUP);
   pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, LOW); // Relé prendido inicialmente
+  digitalWrite(RELAY_PIN, HIGH); // Relé prendido inicialmente
 
   // Configurar interrupción en flanco de bajada
   attachInterrupt(digitalPinToInterrupt(SWITCH_PIN), onMotorTurn, FALLING);
@@ -41,7 +41,7 @@ void loop() {
     
     if (motorCounter >= 10) {
       motorCounter = 0;
-      digitalWrite(RELAY_PIN, HIGH); // Desactivar relé
+      digitalWrite(RELAY_PIN, LOW); // Desactivar relé
     }
   }
 }

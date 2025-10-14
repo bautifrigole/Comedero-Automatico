@@ -2,6 +2,7 @@
 
 const express = require("express");
 const http = require("http");
+const net = require("net");
 const aedes = require("aedes")();
 const ws = require("websocket-stream");
 
@@ -13,13 +14,23 @@ const apiPort = 3001; // Puerto para la API que usa el frontend
 const httpServer = http.createServer(app);
 
 // 2. Configuramos el Broker MQTT (Aedes)
-const mqttPort = 8888; // Puerto para que el ESP32 se conecte vía WebSockets
+const mqttWSPort = 8888; // Puerto WebSockets para frontend
+const mqttTCPPort = 1883; // Puerto TCP para ESP32
 
+// WebSocket server para frontend
 ws.createServer({ server: httpServer }, aedes.handle);
 
-httpServer.listen(mqttPort, function () {
+httpServer.listen(mqttWSPort, function () {
   console.log(
-    `🚀 Broker MQTT (sobre WebSockets) escuchando en el puerto ${mqttPort}`
+    `🚀 Broker MQTT (sobre WebSockets) escuchando en el puerto ${mqttWSPort}`
+  );
+});
+
+// TCP server para ESP32
+const tcpServer = net.createServer(aedes.handle);
+tcpServer.listen(mqttTCPPort, function () {
+  console.log(
+    `🚀 Broker MQTT (TCP) escuchando en el puerto ${mqttTCPPort} para ESP32`
   );
 });
 
@@ -40,9 +51,10 @@ app.use(express.json());
 // Endpoint para que el frontend ordene dispensar comida
 app.post("/api/dispensar", (req, res) => {
   console.log("API: Recibida petición para dispensar...");
+  const { device = "comedero/01" } = req.body;
 
   const message = {
-    topic: "comedero/01/ordenes",
+    topic: `${device}/ordenes`,
     payload: "DISPENSAR_COMIDA",
     qos: 1,
     retain: false,
@@ -54,9 +66,74 @@ app.post("/api/dispensar", (req, res) => {
       console.error("MQTT Error:", err);
       return res.status(500).send("Error al enviar la orden");
     }
-    console.log('MQTT: Orden "DISPENSAR_COMIDA" enviada al topic.');
+    console.log(
+      `MQTT: Orden "DISPENSAR_COMIDA" enviada al topic ${device}/ordenes`
+    );
     res.status(200).send("Orden de dispensar enviada");
   });
+});
+
+// Endpoint para iniciar el motor manualmente
+app.post("/api/iniciar-motor", (req, res) => {
+  console.log("API: Recibida petición para iniciar motor...");
+  const { device = "comedero/01" } = req.body;
+
+  const message = {
+    topic: `${device}/ordenes`,
+    payload: "INICIAR_MOTOR",
+    qos: 1,
+    retain: false,
+  };
+
+  aedes.publish(message, (err) => {
+    if (err) {
+      console.error("MQTT Error:", err);
+      return res.status(500).send("Error al enviar la orden");
+    }
+    console.log(
+      `MQTT: Orden "INICIAR_MOTOR" enviada al topic ${device}/ordenes`
+    );
+    res.status(200).send("Motor iniciado");
+  });
+});
+
+// Endpoint para detener el motor manualmente
+app.post("/api/detener-motor", (req, res) => {
+  console.log("API: Recibida petición para detener motor...");
+  const { device = "comedero/01" } = req.body;
+
+  const message = {
+    topic: `${device}/ordenes`,
+    payload: "DETENER_MOTOR",
+    qos: 1,
+    retain: false,
+  };
+
+  aedes.publish(message, (err) => {
+    if (err) {
+      console.error("MQTT Error:", err);
+      return res.status(500).send("Error al enviar la orden");
+    }
+    console.log(
+      `MQTT: Orden "DETENER_MOTOR" enviada al topic ${device}/ordenes`
+    );
+    res.status(200).send("Motor detenido");
+  });
+});
+
+// Endpoint para listar dispositivos conectados
+app.get("/api/dispositivos", (req, res) => {
+  const clients = [];
+  aedes.clients.forEach((client, clientId) => {
+    if (clientId.startsWith("ESP32Client-")) {
+      clients.push({
+        id: clientId,
+        connected: client.connected,
+        lastSeen: new Date(),
+      });
+    }
+  });
+  res.json(clients);
 });
 
 // 4. Iniciamos el servidor de la API

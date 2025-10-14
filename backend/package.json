@@ -11,6 +11,7 @@
   "description": "",
   "dependencies": {
     "aedes": "^0.51.3",
+    "cors": "^2.8.5",
     "express": "^5.1.0",
     "websocket-stream": "^5.3.0"
   }

@@ -2,11 +2,11 @@
 #include <PubSubClient.h>
 
 // --- Configuración WiFi y MQTT ---
-const char* ssid = "LABORATORIO-C"; // Cambia esto por el SSID de tu red
-const char* password = "";
+const char* ssid = "buti"; // Cambia esto por el SSID de tu red
+const char* password = "vladimir";
 // IP de la computadora donde corre el backend. ¡Cámbiala por la tuya!
-const char* mqtt_server = "10.65.3.219"; 
-const int mqtt_port = 8888; // Puerto WebSocket
+const char* mqtt_server = "192.168.247.246"; 
+const int mqtt_port = 1883; // Puerto TCP para MQTT
 
 // --- Pines ---
 #define SWITCH_PIN 27
@@ -14,6 +14,7 @@ const int mqtt_port = 8888; // Puerto WebSocket
 
 volatile int motorCounter = 0;
 volatile bool switchTriggered = false;
+bool motorRunning = false; // Estado del motor
 
 // --- Clientes ---
 WiFiClient wifiClient;
@@ -39,7 +40,21 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
   if (message == "DISPENSAR_COMIDA") {
     Serial.println("Activando el relé para dispensar comida...");
-    digitalWrite(RELAY_PIN, LOW); // Activar relé
+    digitalWrite(RELAY_PIN, HIGH); // Activar relé
+    motorRunning = true;
+  }
+  else if (message == "INICIAR_MOTOR") {
+    Serial.println("Iniciando motor manualmente...");
+    digitalWrite(RELAY_PIN, HIGH); // Activar relé
+    motorRunning = true;
+    motorCounter = 0; // Resetear contador
+    client.publish("comedero/01/estado", "MOTOR_INICIADO");
+  }
+  else if (message == "DETENER_MOTOR") {
+    Serial.println("Deteniendo motor manualmente...");
+    digitalWrite(RELAY_PIN, LOW); // Desactivar relé
+    motorRunning = false;
+    client.publish("comedero/01/estado", "MOTOR_DETENIDO");
   }
 }
 
@@ -106,9 +121,11 @@ void loop() {
     // Publicar estado al backend
     client.publish("comedero/01/estado", ("Vuelta: " + String(motorCounter)).c_str());
 
-    if (motorCounter >= 10) {
+    // Solo detener automáticamente si estaba en modo dispensar comida (no en modo manual)
+    if (motorRunning && motorCounter >= 10) {
       motorCounter = 0;
       digitalWrite(RELAY_PIN, HIGH); // Desactivar relé
+      motorRunning = false;
       Serial.println("Dispensador detenido. Ración completa.");
       client.publish("comedero/01/estado", "RACION_COMPLETA");
     }

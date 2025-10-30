@@ -1,47 +1,28 @@
-//#include "thingProperties.h"
-
-#define SWITCH_PIN 27   // Switch conectado al GPIO27
-#define RELAY_PIN 12    // Pin GPIO 12 conectado al IN del relay
-
-volatile int motorCounter = 0;
-volatile bool switchTriggered = false;
-
-void IRAM_ATTR onMotorTurn() {
-  if (switchTriggered) return;
-  motorCounter++;
-  switchTriggered = true;
-}
+#define PUMP_PIN 13    // D7
+#define MOTOR_PIN 15   // D8
+//#define SWITCH_PIN 0   // D3
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
 
-  // Inicializar Cloud
-  //initProperties();
-  //ArduinoCloud.begin(ArduinoIoTPreferredConnection);
+  pinMode(MOTOR_PIN, OUTPUT);
+  pinMode(PUMP_PIN, OUTPUT);
+  //pinMode(SWITCH_PIN, INPUT_PULLUP);
+  pinMode(LED_BUILTIN, OUTPUT);
 
-  // Configuración de pines
-  pinMode(SWITCH_PIN, INPUT_PULLUP);
-  pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, HIGH); // Relé prendido inicialmente
-
-  // Configurar interrupción en flanco de bajada
-  attachInterrupt(digitalPinToInterrupt(SWITCH_PIN), onMotorTurn, FALLING);
-
-  //setDebugMessageLevel(2);
-  //ArduinoCloud.printDebugInfo();
+  Serial.println("Sistema iniciado.");
 }
 
 void loop() {
-  //ArduinoCloud.update();
-  
-  if (switchTriggered) {
-    delay(1000);  
-    switchTriggered = false;  // reset bandera
-    Serial.println("Vuelta detectada. Contador = " + String(motorCounter));
-    
-    if (motorCounter >= 10) {
-      motorCounter = 0;
-      digitalWrite(RELAY_PIN, LOW); // Desactivar relé
-    }
-  }
+  Serial.println("Encendiendo motor y bomba...");
+  digitalWrite(MOTOR_PIN, HIGH);
+  digitalWrite(PUMP_PIN, HIGH);
+  digitalWrite(LED_BUILTIN, LOW);
+  delay(10000);
+
+  Serial.println("Apagando motor y bomba...");
+  digitalWrite(MOTOR_PIN, LOW);
+  digitalWrite(PUMP_PIN, LOW);
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(5000);
 }

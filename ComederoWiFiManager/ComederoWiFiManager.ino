@@ -12,8 +12,9 @@ char device_name[32] = "Feeder-01";
 bool shouldSaveConfig = false;
 
 // --- Pins ---
-#define SWITCH_PIN 27
-#define RELAY_PIN 12
+#define SWITCH_PIN 0 // D3
+#define PUMP_PIN 13    // D7
+#define MOTOR_PIN 15 // D8
 // We only use the physical RESET button (no BOOT button)
 
 // --- Operation Modes ---
@@ -64,7 +65,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     currentMode = MODE_DISPENSE_FOOD;
     targetTurns = 10;
     motorCounter = 0;
-    digitalWrite(RELAY_PIN, HIGH); // Activate relay
+    digitalWrite(MOTOR_PIN, HIGH); // Activate relay
     motorRunning = true;
     client.publish((String(device_name) + "/status").c_str(), "DISPENSE_STARTED");
   }
@@ -73,7 +74,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     currentMode = MODE_MANUAL;
     targetTurns = 0;
     motorCounter = 0;
-    digitalWrite(RELAY_PIN, HIGH); // Activate relay
+    digitalWrite(MOTOR_PIN, HIGH); // Activate relay
     motorRunning = true;
     client.publish((String(device_name) + "/status").c_str(), "MOTOR_MANUAL_STARTED");
   }
@@ -82,7 +83,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     currentMode = MODE_IDLE;
     targetTurns = 0;
     motorRunning = false;
-    digitalWrite(RELAY_PIN, LOW); // Deactivate relay
+    digitalWrite(MOTOR_PIN, LOW); // Deactivate relay
     client.publish((String(device_name) + "/status").c_str(), "MOTOR_STOPPED");
   }
 }
@@ -186,8 +187,8 @@ void setup() {
 
   // --- Pin Configuration ---
   pinMode(SWITCH_PIN, INPUT_PULLUP);
-  pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, LOW); // Relay off initially
+  pinMode(MOTOR_PIN, OUTPUT);
+  digitalWrite(MOTOR_PIN, LOW); // Relay off initially
 
   attachInterrupt(digitalPinToInterrupt(SWITCH_PIN), onMotorTurn, FALLING);
 
@@ -271,7 +272,7 @@ void setup() {
   Serial.println("");
   Serial.println("=== STARTING INITIAL TEST TURN ===");
   Serial.println("🔄 Starting test turn...");
-  digitalWrite(RELAY_PIN, HIGH); // Activate motor
+  digitalWrite(MOTOR_PIN, HIGH); // Activate motor
   motorRunning = true;
   motorCounter = 0;
   Serial.println("⚙️  Motor activated for initial turn");
@@ -296,7 +297,7 @@ void loop() {
 
     // Initial test turn logic: only if not done yet
     if (!initialTestDone) {
-      digitalWrite(RELAY_PIN, LOW); // Deactivate relay
+      digitalWrite(MOTOR_PIN, LOW); // Deactivate relay
       motorRunning = false;
       initialTestDone = true;
       Serial.println("✅ Initial turn completed - System ready");
@@ -311,7 +312,7 @@ void loop() {
     if (currentMode == MODE_DISPENSE_FOOD) {
       if (motorCounter >= targetTurns) {
         motorCounter = 0;
-        digitalWrite(RELAY_PIN, LOW); // Stop motor
+        digitalWrite(MOTOR_PIN, LOW); // Stop motor
         motorRunning = false;
         currentMode = MODE_IDLE;
         Serial.println("Dispenser stopped. Ration complete.");

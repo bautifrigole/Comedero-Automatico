@@ -2,7 +2,7 @@
 
 "use client";
 
-const backendUrl = "http://192.168.68.106:3001";
+const backendUrl = "http://192.168.50.41:3001";
 
 import { useState, useEffect } from "react";
 

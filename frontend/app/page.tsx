@@ -2,9 +2,11 @@
 
 "use client";
 
-const backendUrl = "http://192.168.50.41:3001";
+const backendUrl = "http://10.173.102.246:8888";
 
 import { useState, useEffect } from "react";
+// Importar el nuevo componente
+import ScheduleManager from "../components/ScheduleManager";
 
 export default function HomePage() {
   const [status, setStatus] = useState("Inactive");
@@ -108,8 +110,10 @@ export default function HomePage() {
       style={{
         fontFamily: "Arial",
         textAlign: "center",
-        marginTop: "100px",
+        marginTop: "30px", // Ajustado para el nuevo componente
         padding: "20px",
+        backgroundColor: "#f7f7f7",
+        minHeight: "100vh",
       }}
     >
       <h1>🐾 Feeder Control</h1>
@@ -117,13 +121,17 @@ export default function HomePage() {
         Status: <strong>{status}</strong>
       </p>
 
+      {/* Componente para gestionar los horarios de comida y agua */}
+      <ScheduleManager backendUrl={backendUrl} />
+
+      {/* Botones de control manual */}
       <div
         style={{
           display: "flex",
           flexDirection: "column",
           gap: "20px",
           maxWidth: "400px",
-          margin: "0 auto",
+          margin: "30px auto 0 auto", // Margen superior para separarlo del Schedule Manager
         }}
       >
         <button
@@ -138,6 +146,7 @@ export default function HomePage() {
             border: "none",
             borderRadius: "10px",
             transition: "background-color 0.3s",
+            opacity: isLoading ? 0.5 : 1,
           }}
         >
           {isLoading ? "Processing..." : "🍽️ Dispense Food"}
@@ -155,6 +164,7 @@ export default function HomePage() {
             border: "none",
             borderRadius: "10px",
             transition: "background-color 0.3s",
+            opacity: isLoading ? 0.5 : 1,
           }}
         >
           {isLoading ? "Processing..." : "▶️ Start Motor"}
@@ -172,6 +182,7 @@ export default function HomePage() {
             border: "none",
             borderRadius: "10px",
             transition: "background-color 0.3s",
+            opacity: isLoading ? 0.5 : 1,
           }}
         >
           {isLoading ? "Processing..." : "⏹️ Stop Motor"}

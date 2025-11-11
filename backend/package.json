@@ -16,6 +16,7 @@
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "morgan": "^1.10.1",
+    "mqtt": "^5.14.1",
     "node-cron": "^4.2.1",
     "websocket-stream": "^5.3.0"
   },

@@ -1,80 +1,149 @@
-#include <WiFi.h>
+#include <ESP8266WiFi.h>
 #include <WiFiManager.h>
 #include <PubSubClient.h>
-#include <Preferences.h>
+#include <EEPROM.h> 
 
-// --- MQTT Configuration ---
-char mqtt_server[40] = "192.168.247.246";
-char mqtt_port[6] = "1883";
-char device_name[32] = "Feeder-01";
+// --- CONSTANTES GLOBALES ---
+// Duración de la dispensación de comida en milisegundos (10 segundos)
+const long FOOD_DISPENSE_DURATION_MS = 10000; 
+// Duración de la dispensación de agua en milisegundos (3 segundos)
+const long WATER_DISPENSE_DURATION_MS = 3000; 
 
+// Definición de la estructura de configuración para EEPROM
+struct Config {
+  char mqtt_server[40];
+  char mqtt_port[6];
+  char device_name[32];
+  unsigned long lastResetTime;
+  int resetCount;
+};
+
+Config config; 
+
+// Dirección de inicio en la EEPROM para la configuración
+const int CONFIG_START = 0;
+const int RESET_DATA_START = sizeof(Config) - sizeof(unsigned long) - sizeof(int); 
+
+// Flag to save configuration
 bool shouldSaveConfig = false;
 
-// --- Pines ---
-#define MOTOR_PIN 15   // Relé del motor de comida
-#define PUMP_PIN 13    // Relé de la bomba de agua
+// --- Pins (ESP8266 D-Pins) ---
+#define SWITCH_PIN 5 // GPIO5 / D1 (Ya no se usa para conteo)
+#define PUMP_PIN 13    // GPIO13 / D7
+#define MOTOR_PIN 15 // GPIO15 / D8
 
-// --- Estado general ---
+// --- Operation Modes ---
+enum OperationMode {
+  MODE_IDLE,
+  MODE_DISPENSE_FOOD, // Ahora basado en tiempo
+  MODE_MANUAL,        
+  MODE_DISPENSE_WATER, 
+  MODE_PUMP_MANUAL     
+};
+
+// --- Variables de Estado ---
+// motorCounter, switchTriggered, targetTurns, y lastTurnProcessingTime han sido eliminadas.
 bool motorRunning = false;
-bool pumpRunning = false;
-unsigned long motorStartTime = 0;
-unsigned long pumpStartTime = 0;
-const unsigned long DISPENSE_DURATION = 10000; // 10 segundos
-const unsigned long PUMP_DURATION = 10000;     // 10 segundos
+bool pumpRunning = false; 
+bool initialTestDone = false;
+OperationMode currentMode = MODE_IDLE;
 
-// --- MQTT / WiFi / Storage ---
+// --- Variables de Tiempo ---
+unsigned long dispenseStartTime = 0; 
+
+// --- Clients ---
 WiFiClient wifiClient;
 PubSubClient client(wifiClient);
-Preferences preferences;
 
-// --- Guardar configuración ---
+// --- Function to save configuration (Mismo código) ---
 void saveConfigCallback() {
+  Serial.println("Configuration saved");
   shouldSaveConfig = true;
 }
 
-// --- Callback MQTT ---
+// --- Interrupt Function (ELIMINADA) ---
+// La función onMotorTurn() ya no es necesaria.
+
+// --- MQTT Callback ---
 void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Message received on [");
+  Serial.print(topic);
+  Serial.print("]: ");
   String message;
-  for (int i = 0; i < length; i++) message += (char)payload[i];
+  for (int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+  Serial.println(message);
 
-  Serial.println("📩 Mensaje recibido: " + message);
-
+  // --- Lógica del Motor (Comida) - AHORA BASADO EN TIEMPO ---
   if (message == "DISPENSE_FOOD") {
-    Serial.println("🍖 Dispensing food for 10 seconds...");
-    digitalWrite(MOTOR_PIN, HIGH);
+    Serial.println("Order: DISPENSE_FOOD -> start dispensing (10 seconds)");
+    currentMode = MODE_DISPENSE_FOOD;
+    dispenseStartTime = millis(); // Iniciar temporizador
+    digitalWrite(MOTOR_PIN, HIGH); // Activate relay
     motorRunning = true;
-    motorStartTime = millis();
-    client.publish((String(device_name) + "/status").c_str(), "DISPENSE_STARTED");
+    client.publish((String(config.device_name) + "/status").c_str(), "DISPENSE_STARTED");
+  }
+  else if (message == "START_MOTOR") {
+    Serial.println("Order: START_MOTOR -> motor in manual mode (indefinite)");
+    currentMode = MODE_MANUAL;
+    digitalWrite(MOTOR_PIN, HIGH); // Activate relay
+    motorRunning = true;
+    client.publish((String(config.device_name) + "/status").c_str(), "MOTOR_MANUAL_STARTED");
+  }
+  else if (message == "STOP_MOTOR") {
+    Serial.println("Order: STOP_MOTOR -> stop motor");
+    currentMode = MODE_IDLE;
+    motorRunning = false;
+    digitalWrite(MOTOR_PIN, LOW); // Deactivate relay
+    client.publish((String(config.device_name) + "/status").c_str(), "MOTOR_STOPPED");
+  }
+  
+  // --- Lógica de la Bomba (Agua) ---
+  else if (message == "DISPENSE_WATER") {
+    Serial.println("Order: DISPENSE_WATER -> start dispensing water (3 seconds)");
+    currentMode = MODE_DISPENSE_WATER;
+    dispenseStartTime = millis(); // Iniciar temporizador
+    digitalWrite(PUMP_PIN, HIGH); // Activar bomba
+    pumpRunning = true;
+    client.publish((String(config.device_name) + "/status").c_str(), "WATER_DISPENSE_STARTED");
   }
   else if (message == "START_PUMP") {
-    Serial.println("💧 Pump ON for 10 seconds...");
-    digitalWrite(PUMP_PIN, HIGH);
+    Serial.println("Order: START_PUMP -> pump in manual mode (indefinite)");
+    currentMode = MODE_PUMP_MANUAL;
+    digitalWrite(PUMP_PIN, HIGH); // Activar bomba
     pumpRunning = true;
-    pumpStartTime = millis();
-    client.publish((String(device_name) + "/status").c_str(), "PUMP_STARTED");
+    client.publish((String(config.device_name) + "/status").c_str(), "PUMP_MANUAL_STARTED");
   }
-  else if (message == "STOP_ALL") {
-    Serial.println("🛑 Stopping all relays");
-    digitalWrite(MOTOR_PIN, LOW);
-    digitalWrite(PUMP_PIN, LOW);
-    motorRunning = false;
+  else if (message == "STOP_PUMP") {
+    Serial.println("Order: STOP_PUMP -> stop pump");
+    currentMode = MODE_IDLE;
     pumpRunning = false;
-    client.publish((String(device_name) + "/status").c_str(), "ALL_STOPPED");
+    digitalWrite(PUMP_PIN, LOW); // Desactivar bomba
+    client.publish((String(config.device_name) + "/status").c_str(), "PUMP_STOPPED");
   }
 }
 
-// --- MQTT reconexión ---
+// --- MQTT Reconnection (Mismo código) ---
 void reconnect() {
   while (!client.connected()) {
-    Serial.print("Connecting to MQTT...");
-    String clientId = "ESP32Feeder-" + String(random(0xffff), HEX);
+    Serial.print("Attempting MQTT connection to ");
+    Serial.print(config.mqtt_server);
+    Serial.print(":");
+    Serial.print(config.mqtt_port);
+    Serial.print("...");
+    
+    String clientId = "ESP8266Client-"; 
+    clientId += String(random(0xffff), HEX);
+    
     if (client.connect(clientId.c_str())) {
-      Serial.println(" connected!");
-      String topic = String(device_name) + "/orders";
+      Serial.println("Connected!");
+      // Subscribe to custom orders topic
+      String topic = String(config.device_name) + "/orders";
       client.subscribe(topic.c_str());
       Serial.println("Subscribed to: " + topic);
     } else {
-      Serial.print(" failed, rc=");
+      Serial.print("failed, rc=");
       Serial.print(client.state());
       Serial.println(" retrying in 5 seconds");
       delay(5000);
@@ -82,53 +151,102 @@ void reconnect() {
   }
 }
 
-// --- Cargar configuración ---
+// --- Function to load configuration (Mismo código) ---
 void loadConfig() {
-  preferences.begin("comedero", false);
-  String saved_server = preferences.getString("mqtt_server", "");
-  String saved_port = preferences.getString("mqtt_port", "1883");
-  String saved_device = preferences.getString("device_name", "Feeder-01");
-
-  if (saved_server.length() > 0) saved_server.toCharArray(mqtt_server, 40);
-  saved_port.toCharArray(mqtt_port, 6);
-  saved_device.toCharArray(device_name, 32);
-
-  preferences.end();
-
+  EEPROM.begin(sizeof(Config));
+  EEPROM.get(CONFIG_START, config);
+  
+  if (config.mqtt_server[0] == 0xFF || config.mqtt_server[0] == 0) {
+    Serial.println("No saved configuration found. Using default values.");
+    strcpy(config.mqtt_server, "192.168.247.246");
+    strcpy(config.mqtt_port, "1883");
+    strcpy(config.device_name, "Feeder-01");
+    config.lastResetTime = 0;
+    config.resetCount = 0;
+    saveConfig(); 
+  }
+  
   Serial.println("Configuration loaded:");
-  Serial.println("MQTT Server: " + String(mqtt_server));
-  Serial.println("MQTT Port: " + String(mqtt_port));
-  Serial.println("Device Name: " + String(device_name));
+  Serial.println("MQTT Server: " + String(config.mqtt_server));
+  Serial.println("MQTT Port: " + String(config.mqtt_port));
+  Serial.println("Device Name: " + String(config.device_name));
+  EEPROM.end();
 }
 
-// --- Guardar configuración ---
+// --- Function to save configuration (Mismo código) ---
 void saveConfig() {
-  preferences.begin("comedero", false);
-  preferences.putString("mqtt_server", mqtt_server);
-  preferences.putString("mqtt_port", mqtt_port);
-  preferences.putString("device_name", device_name);
-  preferences.end();
-  Serial.println("Configuration saved");
+  EEPROM.begin(sizeof(Config));
+  EEPROM.put(CONFIG_START, config);
+  EEPROM.commit();
+  EEPROM.end();
+  Serial.println("Configuration saved to memory");
+}
+
+// --- Function to detect rapid consecutive resets (Mismo código) ---
+bool checkForConfigReset() {
+  EEPROM.begin(sizeof(Config));
+  EEPROM.get(RESET_DATA_START, config.lastResetTime);
+  EEPROM.get(RESET_DATA_START + sizeof(unsigned long), config.resetCount);
+  
+  unsigned long currentTime = millis();
+  
+  if (currentTime > 10000 && (currentTime - config.lastResetTime) > 10000) {
+    config.resetCount = 0;
+  }
+  
+  config.resetCount++;
+  config.lastResetTime = currentTime;
+  
+  EEPROM.put(RESET_DATA_START, config.lastResetTime);
+  EEPROM.put(RESET_DATA_START + sizeof(unsigned long), config.resetCount);
+  EEPROM.commit();
+  
+  Serial.println("🔄 Reset #" + String(config.resetCount) + " detected");
+  
+  bool shouldReset = false;
+  if (config.resetCount >= 3) {
+    Serial.println("🚨 3 resets detected - Activating configuration mode");
+    config.resetCount = 0; 
+    EEPROM.put(RESET_DATA_START + sizeof(unsigned long), config.resetCount);
+    EEPROM.commit();
+    shouldReset = true;
+  } else {
+    Serial.println("💡 Press RESET " + String(3 - config.resetCount) + " more time(s) in 10sec to configure WiFi");
+  }
+  
+  EEPROM.end();
+  return shouldReset;
 }
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("🐾 Automatic Feeder Starting...");
+  Serial.println();
+  Serial.println("=== AUTOMATIC PET FEEDER (ESP8266) ==="); 
+  Serial.println("Starting...");
 
+  // --- Pin Configuration ---
+  pinMode(SWITCH_PIN, INPUT_PULLUP);
   pinMode(MOTOR_PIN, OUTPUT);
-  pinMode(PUMP_PIN, OUTPUT);
-  digitalWrite(MOTOR_PIN, LOW);
-  digitalWrite(PUMP_PIN, LOW);
+  pinMode(PUMP_PIN, OUTPUT); 
+  digitalWrite(MOTOR_PIN, LOW); 
+  digitalWrite(PUMP_PIN, LOW);  
 
-  loadConfig();
+  // Load saved configuration
+  loadConfig(); 
 
-  // --- WiFiManager ---
+  // --- Check for rapid resets to force configuration ---
+  bool forceConfig = checkForConfigReset(); 
+
+  // La interrupción para el sensor de giro ha sido ELIMINADA.
+  
+  // --- WiFiManager Configuration (Mismo código) ---
   WiFiManager wm;
+  
   wm.setSaveConfigCallback(saveConfigCallback);
 
-  WiFiManagerParameter custom_mqtt_server("server", "MQTT Server", mqtt_server, 40);
-  WiFiManagerParameter custom_mqtt_port("port", "MQTT Port", mqtt_port, 6);
-  WiFiManagerParameter custom_device_name("device", "Device Name", device_name, 32);
+  WiFiManagerParameter custom_mqtt_server("server", "MQTT Server", config.mqtt_server, 40);
+  WiFiManagerParameter custom_mqtt_port("port", "MQTT Port", config.mqtt_port, 6);
+  WiFiManagerParameter custom_device_name("device", "Device Name", config.device_name, 32);
 
   wm.addParameter(&custom_mqtt_server);
   wm.addParameter(&custom_mqtt_port);
@@ -136,47 +254,88 @@ void setup() {
 
   wm.setConfigPortalTimeout(180);
   wm.setCustomHeadElement("<style>body{background-color:#f0f8ff;}</style>");
-
-  Serial.println("Connecting to WiFi...");
+  
+  Serial.println("Attempting WiFi connection...");
+  
+  if (forceConfig) {
+    Serial.println("🗑️  Clearing saved WiFi configuration and EEPROM...");
+    wm.resetSettings();
+    
+    EEPROM.begin(sizeof(Config));
+    for (int i = 0; i < sizeof(Config); i++) {
+        EEPROM.write(i, 0xFF); 
+    }
+    EEPROM.commit();
+    EEPROM.end();
+    
+    loadConfig(); 
+    Serial.println("✅ Configuration cleared. Starting portal...");
+  }
+  
   if (!wm.autoConnect("Feeder-Setup", "12345678")) {
-    Serial.println("Connection failed, restarting...");
+    Serial.println("Connection failed and timeout reached");
     delay(3000);
     ESP.restart();
   }
 
-  Serial.println("WiFi connected!");
-  Serial.println("IP Address: " + WiFi.localIP().toString());
+  Serial.println("");
+  Serial.println("WiFi connected successfully!");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
 
-  strcpy(mqtt_server, custom_mqtt_server.getValue());
-  strcpy(mqtt_port, custom_mqtt_port.getValue());
-  strcpy(device_name, custom_device_name.getValue());
-  if (shouldSaveConfig) saveConfig();
+  strcpy(config.mqtt_server, custom_mqtt_server.getValue());
+  strcpy(config.mqtt_port, custom_mqtt_port.getValue());
+  strcpy(config.device_name, custom_device_name.getValue());
 
-  client.setServer(mqtt_server, atoi(mqtt_port));
+  if (shouldSaveConfig) {
+    saveConfig(); 
+  }
+
+  // --- MQTT Connection ---
+  client.setServer(config.mqtt_server, atoi(config.mqtt_port));
   client.setCallback(callback);
-
-  Serial.println("✅ Setup complete.");
+  
+  Serial.println("=== CONFIGURATION COMPLETE ===");
+  Serial.println("🌐 WiFi: " + WiFi.SSID());
+  Serial.println("📡 IP: " + WiFi.localIP().toString());
+  Serial.println("🔧 MQTT: " + String(config.mqtt_server) + ":" + String(config.mqtt_port));
+  Serial.println("📱 Device: " + String(config.device_name));
+  Serial.println("");
+  
+  // No se realiza una "Prueba Inicial" basada en vueltas, ya que el sensor no se usa para este fin.
+  Serial.println("✅ System ready for time-based dispensing.");
 }
 
 void loop() {
-  if (!client.connected()) reconnect();
-  client.loop();
-
-  unsigned long now = millis();
-
-  // --- Control de motor ---
-  if (motorRunning && (now - motorStartTime >= DISPENSE_DURATION)) {
-    digitalWrite(MOTOR_PIN, LOW);
-    motorRunning = false;
-    Serial.println("🍖 Food dispensing complete.");
-    client.publish((String(device_name) + "/status").c_str(), "DISPENSE_COMPLETE");
+  // MQTT Connection
+  if (!client.connected()) {
+    reconnect();
   }
+  client.loop(); 
 
-  // --- Control de bomba ---
-  if (pumpRunning && (now - pumpStartTime >= PUMP_DURATION)) {
-    digitalWrite(PUMP_PIN, LOW);
-    pumpRunning = false;
-    Serial.println("💧 Pump cycle complete.");
-    client.publish((String(device_name) + "/status").c_str(), "PUMP_COMPLETE");
+  // --- LÓGICA DE LA BOMBA (AGUA) - NO BLOQUEANTE ---
+  if (currentMode == MODE_DISPENSE_WATER) {
+    if (millis() - dispenseStartTime >= WATER_DISPENSE_DURATION_MS) {
+      digitalWrite(PUMP_PIN, LOW); // Detener bomba
+      pumpRunning = false;
+      currentMode = MODE_IDLE;
+      Serial.println("Water dispenser stopped. Ration complete (3s).");
+      String statusTopic = String(config.device_name) + "/status";
+      client.publish(statusTopic.c_str(), "WATER_RATION_COMPLETE");
+    }
   }
+  
+  // --- LÓGICA DEL MOTOR (COMIDA) - NO BLOQUEANTE (10 SEGUNDOS) ---
+  if (currentMode == MODE_DISPENSE_FOOD) {
+    if (millis() - dispenseStartTime >= FOOD_DISPENSE_DURATION_MS) {
+      digitalWrite(MOTOR_PIN, LOW); // Detener motor
+      motorRunning = false;
+      currentMode = MODE_IDLE;
+      Serial.println("Food dispenser stopped. Ration complete (10s).");
+      String statusTopic = String(config.device_name) + "/status";
+      client.publish(statusTopic.c_str(), "RATION_COMPLETE");
+    }
+  }
+  
+  // Lógica de conteo de vueltas eliminada.
 }

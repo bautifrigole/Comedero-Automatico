@@ -2,46 +2,143 @@
 
 "use client";
 
-const backendUrl = "http://10.173.102.246:8888";
+// La URL original es para HTTP. La usaremos para las peticiones de la API.
+const backendHttpUrl = "http://192.168.1.86:8888";
+// La URL para la conexión MQTT por WebSockets.
+const backendWsUrl = "ws://192.168.1.86:8888";
 
 import { useState, useEffect } from "react";
 // Importar el nuevo componente
-import ScheduleManager from "../components/ScheduleManager";
+import ScheduleManager from "../components/ScheduleManager"; // Asumiendo que esta ruta es correcta
+
+// --- Constantes MQTT ---
+const DEVICE_ID = "Feeder-01";
+const LEVEL_TOPIC = `${DEVICE_ID}/level`;
+
+// Definir el tipo para el cliente MQTT global (asumiendo que se carga vía CDN)
+type MqttClient = {
+  connect: (url: string, options: any) => any;
+  subscribe: (topic: string, callback: (err: any) => void) => void;
+  on: (event: string, callback: (...args: any[]) => void) => void;
+  end: () => void;
+};
+// -----------------------
 
 export default function HomePage() {
   const [status, setStatus] = useState("Inactive");
+  const [foodLevel, setFoodLevel] = useState("Unknown"); // Nuevo estado para el nivel del sensor
   const [isLoading, setIsLoading] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
 
-  // useEffect runs only on the client, after the first render.
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
-
-  const handleDispenseClick = async () => {
-    setIsLoading(true);
-    setStatus("Sending dispense order...");
+  // Función para inicializar la conexión MQTT
+  const initializeMqttConnection = (mqttGlobal: MqttClient) => {
+    let client: ReturnType<MqttClient["connect"]> | null = null;
 
     try {
-      const response = await fetch(`${backendUrl}/api/dispense`, {
+      client = mqttGlobal.connect(backendWsUrl, {
+        // Conexión WebSocket
+        protocol: "ws",
+        clientId: `feeder_frontend_${Math.random().toString(16).substr(2, 8)}`,
+      });
+
+      client.on("connect", () => {
+        console.log("MQTT Client connected to broker via WebSocket.");
+
+        client?.subscribe(LEVEL_TOPIC, (err: any) => {
+          if (!err) {
+            console.log(`Subscribed to ${LEVEL_TOPIC}`);
+          }
+        });
+        client?.subscribe(`${DEVICE_ID}/status`, (err: any) => {
+          if (!err) {
+            console.log(`Subscribed to ${DEVICE_ID}/status`);
+          }
+        });
+      });
+
+      client.on("message", (topic: string, message: Buffer) => {
+        const payload = message.toString();
+
+        if (topic === LEVEL_TOPIC) {
+          if (payload === "FOOD_LEVEL_LOW") {
+            setFoodLevel("🔴 BAJO");
+          } else if (payload === "FOOD_LEVEL_OK") {
+            setFoodLevel("🟢 OK");
+          }
+        }
+
+        if (topic === `${DEVICE_ID}/status`) {
+          if (payload === "RATION_COMPLETE") {
+            setStatus("✅ Ración de comida completada.");
+            setTimeout(() => setStatus("Inactive"), 5000);
+          } else if (payload === "DISPENSE_STARTED") {
+            setStatus("🍽️ Dispensando comida...");
+          }
+        }
+      });
+
+      client.on("error", (err: Error) => {
+        console.error("MQTT Connection Error:", err);
+        setFoodLevel("❌ Error de Conexión MQTT");
+      });
+    } catch (e) {
+      console.error("Failed to set up MQTT client:", e);
+      setFoodLevel("❌ Error de inicialización de MQTT");
+    }
+
+    return client;
+  };
+
+  useEffect(() => {
+    setIsMounted(true);
+    let mqttClient: ReturnType<MqttClient["connect"]> | null = null;
+    let checkInterval: NodeJS.Timeout;
+
+    // --- Mecanismo de Polling (Espera) ---
+    checkInterval = setInterval(() => {
+      const mqttGlobal: MqttClient | undefined = (window as any).mqtt;
+
+      if (mqttGlobal) {
+        clearInterval(checkInterval); // Detener la verificación
+        mqttClient = initializeMqttConnection(mqttGlobal);
+      } else {
+        // console.log("Waiting for MQTT library..."); // Descomentar para debug
+        setFoodLevel("... Conectando MQTT ...");
+      }
+    }, 100); // Verificar cada 100ms
+
+    return () => {
+      // Limpiar el intervalo y la conexión al desmontar
+      clearInterval(checkInterval);
+      if (mqttClient) {
+        mqttClient.end();
+        console.log("MQTT Client disconnected.");
+      }
+    };
+  }, []); // El array vacío asegura que esto corra solo una vez.
+
+  // --- Lógica de Botones (Sin cambios) ---
+  const handleDispenseClick = async () => {
+    setIsLoading(true);
+    setStatus("Enviando orden de dispensar...");
+
+    try {
+      const response = await fetch(`${backendHttpUrl}/api/dispense`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ device: "Feeder-01" }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device: DEVICE_ID }),
       });
 
       if (response.ok) {
-        setStatus("✅ Dispense order sent successfully!");
+        setStatus("✅ Orden enviada. Esperando confirmación...");
       } else {
-        setStatus("❌ Error sending order.");
+        setStatus("❌ Error enviando orden.");
       }
     } catch (error) {
       console.error("Connection error:", error);
-      setStatus("❌ Could not connect to server.");
+      setStatus("❌ No se pudo conectar al servidor.");
     } finally {
       setIsLoading(false);
-      setTimeout(() => setStatus("Inactive"), 3000);
     }
   };
 
@@ -50,11 +147,9 @@ export default function HomePage() {
     setStatus("Starting motor...");
 
     try {
-      const response = await fetch(`${backendUrl}/api/start-motor`, {
+      const response = await fetch(`${backendHttpUrl}/api/start-motor`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ device: "Feeder-01" }),
       });
 
@@ -77,11 +172,9 @@ export default function HomePage() {
     setStatus("Stopping motor...");
 
     try {
-      const response = await fetch(`${backendUrl}/api/stop-motor`, {
+      const response = await fetch(`${backendHttpUrl}/api/stop-motor`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ device: "Feeder-01" }),
       });
 
@@ -99,30 +192,60 @@ export default function HomePage() {
     }
   };
 
-  // Don't render anything on the server or on the client's first render
-  // to avoid discrepancies.
   if (!isMounted) {
-    return null; // Or you can return a loading skeleton
+    return null;
   }
+
+  // Estilo para el estado del nivel de comida
+  const foodLevelStyle = (level: string) => {
+    const base = "font-bold p-2 rounded-lg text-white shadow-md";
+    if (level.includes("BAJO")) return `${base} bg-red-600`;
+    if (level.includes("OK")) return `${base} bg-green-600`;
+    return `${base} bg-gray-500`;
+  };
 
   return (
     <main
       style={{
         fontFamily: "Arial",
         textAlign: "center",
-        marginTop: "30px", // Ajustado para el nuevo componente
+        marginTop: "30px",
         padding: "20px",
         backgroundColor: "#f7f7f7",
         minHeight: "100vh",
       }}
     >
       <h1>🐾 Feeder Control</h1>
-      <p style={{ fontSize: "18px", marginBottom: "30px" }}>
-        Status: <strong>{status}</strong>
-      </p>
+
+      {/* Indicador del Nivel de Comida */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "center",
+          gap: "20px",
+          marginBottom: "30px",
+          alignItems: "center",
+        }}
+      >
+        <p style={{ fontSize: "18px" }}>
+          Status: <strong>{status}</strong>
+        </p>
+        <div
+          style={{ width: "2px", height: "30px", backgroundColor: "#ccc" }}
+        ></div>
+        <p style={{ fontSize: "18px" }}>
+          Nivel Comida:
+          <span
+            className={foodLevelStyle(foodLevel)}
+            style={{ marginLeft: "10px" }}
+          >
+            {foodLevel}
+          </span>
+        </p>
+      </div>
 
       {/* Componente para gestionar los horarios de comida y agua */}
-      <ScheduleManager backendUrl={backendUrl} />
+      <ScheduleManager backendUrl={backendHttpUrl} />
 
       {/* Botones de control manual */}
       <div
@@ -131,7 +254,7 @@ export default function HomePage() {
           flexDirection: "column",
           gap: "20px",
           maxWidth: "400px",
-          margin: "30px auto 0 auto", // Margen superior para separarlo del Schedule Manager
+          margin: "30px auto 0 auto",
         }}
       >
         <button

@@ -8,6 +8,10 @@
 const long FOOD_DISPENSE_DURATION_MS = 10000; 
 // Duración de la dispensación de agua en milisegundos (3 segundos)
 const long WATER_DISPENSE_DURATION_MS = 3000; 
+// Intervalo para chequear el sensor IR (5 segundos)
+const long IR_CHECK_INTERVAL_MS = 5000; 
+
+
 // Definición de la estructura de configuración para EEPROM
 struct Config {
   char mqtt_server[40];
@@ -27,30 +31,36 @@ const int RESET_DATA_START = sizeof(Config) - sizeof(unsigned long) - sizeof(int
 bool shouldSaveConfig = false;
 
 // --- Pins (ESP8266 D-Pins) ---
-#define SENSOR_IR_PIN 5 // GPIO5 / D1 (Antiguo SWITCH_PIN - Usado para sensor IR)
-#define PUMP_PIN 13    // GPIO13 / D7
-#define MOTOR_PIN 15 // GPIO15 / D8
+// El pin 5 (D1) ya NO se usa para interrupciones, sino para el sensor IR.
+#define SENSOR_IR_PIN 5     // GPIO5 / D1 (Sensor de Nivel de Comida)
+// Eliminamos SWITCH_PIN y SENSOR_IR_PIN en 4 para simplificar y reutilizar D1
+#define PUMP_PIN 13         // GPIO13 / D7
+#define MOTOR_PIN 15        // GPIO15 / D8
 
 // --- Operation Modes ---
 enum OperationMode {
   MODE_IDLE,
-  MODE_DISPENSE_FOOD, 
+  MODE_DISPENSE_FOOD,   // Ahora basado en tiempo
   MODE_MANUAL,        
   MODE_DISPENSE_WATER, 
   MODE_PUMP_MANUAL     
 };
 
 // --- Variables de Estado ---
+// Las variables de conteo de motor (motorCounter, switchTriggered, targetTurns) se ELIMINAN.
 bool motorRunning = false;
 bool pumpRunning = false; 
 bool initialTestDone = false;
 OperationMode currentMode = MODE_IDLE;
-int foodLevelStatus = HIGH; // HIGH: Hay comida, LOW: Poca comida (haz el ajuste según tu sensor)
+
+// Estado de la comida (LOW: OK / HIGH: Bajo, ajusta según tu sensor Omron)
+int foodLevelStatus = HIGH; 
+bool foodLevelCheckPending = false; // Nueva bandera: Chequeo de nivel pendiente al finalizar la ración.
 
 // --- Variables de Tiempo ---
 unsigned long dispenseStartTime = 0; 
-unsigned long lastIRCheckTime = 0; // Para no chequear el sensor constantemente
-const long IR_CHECK_INTERVAL_MS = 5000; // Revisar el sensor cada 5 segundos
+unsigned long lastIRCheckTime = 0; // Para el chequeo no bloqueante del IR
+
 
 // --- Clients ---
 WiFiClient wifiClient;
@@ -61,6 +71,9 @@ void saveConfigCallback() {
   Serial.println("Configuration saved");
   shouldSaveConfig = true;
 }
+
+// --- Interrupt Function (ELIMINADA) ---
+// Se elimina onMotorTurn() y se desactiva la interrupción.
 
 // --- MQTT Callback (Mismo código) ---
 void callback(char* topic, byte* payload, unsigned int length) {
@@ -80,6 +93,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     dispenseStartTime = millis(); // Iniciar temporizador
     digitalWrite(MOTOR_PIN, HIGH); // Activate relay
     motorRunning = true;
+    foodLevelCheckPending = false; // Resetear la bandera
     client.publish((String(config.device_name) + "/status").c_str(), "DISPENSE_STARTED");
   }
   else if (message == "START_MOTOR") {
@@ -223,7 +237,7 @@ void setup() {
   Serial.println("Starting...");
 
   // --- Pin Configuration ---
-  pinMode(SENSOR_IR_PIN, INPUT_PULLUP); // Configurar el sensor IR
+  pinMode(SENSOR_IR_PIN, INPUT_PULLUP);   // Sensor IR de Nivel (Lectura simple)
   pinMode(MOTOR_PIN, OUTPUT);
   pinMode(PUMP_PIN, OUTPUT); 
   digitalWrite(MOTOR_PIN, LOW); 
@@ -234,6 +248,8 @@ void setup() {
 
   // --- Check for rapid resets to force configuration ---
   bool forceConfig = checkForConfigReset(); 
+
+  // NOTA: La interrupción para el pin 5 (D1) YA NO SE ACTIVA.
 
   // --- WiFiManager Configuration (Mismo código) ---
   WiFiManager wm;
@@ -306,60 +322,73 @@ void loop() {
   if (!client.connected()) {
     reconnect();
   }
-  client.loop(); 
+  client.loop(); // Esta función ayuda a mantener el WDT y la conexión MQTT
 
-  // --- LÓGICA DE LA BOMBA (AGUA) - NO BLOQUEANTE ---
+  // --- LÓGICA DE LA BOMBA (NO BLOQUEANTE) ---
   if (currentMode == MODE_DISPENSE_WATER) {
     if (millis() - dispenseStartTime >= WATER_DISPENSE_DURATION_MS) {
       digitalWrite(PUMP_PIN, LOW); // Detener bomba
       pumpRunning = false;
       currentMode = MODE_IDLE;
-      Serial.println("Water dispenser stopped. Ration complete (3s).");
+      Serial.println("Water dispenser stopped. Ration complete.");
       String statusTopic = String(config.device_name) + "/status";
       client.publish(statusTopic.c_str(), "WATER_RATION_COMPLETE");
     }
   }
-  
+
   // --- LÓGICA DEL MOTOR (COMIDA) - NO BLOQUEANTE (10 SEGUNDOS) ---
   if (currentMode == MODE_DISPENSE_FOOD) {
     if (millis() - dispenseStartTime >= FOOD_DISPENSE_DURATION_MS) {
-      digitalWrite(MOTOR_PIN, LOW); // Detener motor
+      // 1. DETENER MOTOR
+      digitalWrite(MOTOR_PIN, LOW); // Stop motor
       motorRunning = false;
       currentMode = MODE_IDLE;
-      Serial.println("Food dispenser stopped. Ration complete (10s).");
+      Serial.println("Dispenser stopped. Ration complete (10s).");
       
-      // *** VERIFICACIÓN DEL NIVEL DE COMIDA DESPUÉS DE LA DISPENSACIÓN ***
-      lastIRCheckTime = 0; // Forzar la verificación del IR inmediatamente
+      // 2. ACTIVAR CHEQUEO IR PENDIENTE
+      foodLevelCheckPending = true; 
       
       String statusTopic = String(config.device_name) + "/status";
       client.publish(statusTopic.c_str(), "RATION_COMPLETE");
     }
   }
   
-  // --- LÓGICA DEL SENSOR IR PARA NIVEL DE COMIDA ---
-  // Solo se verifica si el sistema está en IDLE y el tiempo de chequeo ha pasado
-  //if (currentMode == MODE_IDLE && millis() - lastIRCheckTime >= IR_CHECK_INTERVAL_MS) {
+  // --- LÓGICA DEL SENSOR IR PARA NIVEL DE COMIDA (D1/GPIO5) ---
+  // El chequeo ocurre inmediatamente si está pendiente, o cada 5 segundos.
+  if (foodLevelCheckPending || (currentMode == MODE_IDLE && millis() - lastIRCheckTime >= IR_CHECK_INTERVAL_MS)) {
+    
+    // Si la lectura NO fue forzada (es decir, no estaba pendiente), solo se hace si estamos en IDLE.
+    if (!foodLevelCheckPending && currentMode != MODE_IDLE) {
+      lastIRCheckTime = millis(); // Reiniciar el temporizador para el chequeo periódico
+      return; 
+    }
     
     // Leer el sensor IR (LOW en un Omron break-beam significa que el camino está bloqueado/comida)
     int currentFoodLevel = digitalRead(SENSOR_IR_PIN); 
-
-    // Solo publicar si el estado del nivel ha cambiado
-    if (currentFoodLevel != foodLevelStatus) {
+    
+    Serial.print("IR Check: Pin D1 is ");
+    Serial.println(currentFoodLevel == HIGH ? "HIGH (Libre)" : "LOW (Bloqueado)");
+    
+    // Publicar si el estado ha cambiado O si la lectura fue forzada (después de dispensar)
+    if (currentFoodLevel != foodLevelStatus || foodLevelCheckPending) {
       foodLevelStatus = currentFoodLevel; // Actualizar el estado
       
-      String statusTopic = String(config.device_name) + "/level";
+      String levelTopic = String(config.device_name) + "/level";
 
       if (foodLevelStatus == LOW) {
-        // Asumiendo que LOW significa que la comida está bloqueando el sensor, por lo tanto, hay suficiente.
-        Serial.println("🟢 Nivel de comida: OK (Camino bloqueado)");
-        client.publish(statusTopic.c_str(), "FOOD_LEVEL_OK");
+        // LOW = Comida bloquea el sensor = OK
+        Serial.println("🟢 Nivel de comida: OK (Suficiente)");
+        client.publish(levelTopic.c_str(), "FOOD_LEVEL_OK");
       } else {
-        // Asumiendo que HIGH significa que el camino está libre, por lo tanto, poca comida.
-        Serial.println("🔴 Nivel de comida: BAJO (Camino libre)");
-        client.publish(statusTopic.c_str(), "FOOD_LEVEL_LOW");
+        // HIGH = Sensor libre = Poca comida
+        Serial.println("🔴 Nivel de comida: BAJO (Poca comida)");
+        client.publish(levelTopic.c_str(), "FOOD_LEVEL_LOW");
       }
+      
+      // La publicación solo se envía UNA VEZ después de dispensar.
+      foodLevelCheckPending = false; 
     }
     
     lastIRCheckTime = millis(); // Reiniciar el temporizador
-  //}
+  }
 }

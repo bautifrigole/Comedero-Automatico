@@ -6,6 +6,12 @@
 // --- CONSTANTES GLOBALES ---
 // Tiempo mínimo entre la lectura de dos giros del motor (para rate limiting/debouncing)
 const long TURN_PROCESSING_DELAY_MS = 500; 
+// Duración de la dispensación de agua en milisegundos (3 segundos)
+const long WATER_DISPENSE_DURATION_MS = 3000; 
+
+// Intervalo para chequear el sensor IR (5 segundos)
+const long IR_CHECK_INTERVAL_MS = 5000; 
+
 
 // Definición de la estructura de configuración para EEPROM
 struct Config {
@@ -26,9 +32,10 @@ const int RESET_DATA_START = sizeof(Config) - sizeof(unsigned long) - sizeof(int
 bool shouldSaveConfig = false;
 
 // --- Pins (ESP8266 D-Pins) ---
-#define SWITCH_PIN 5 // GPIO5 / D1 (Pin de interrupción más seguro) 
-#define PUMP_PIN 13    // GPIO13 / D7
-#define MOTOR_PIN 15 // GPIO15 / D8
+#define SWITCH_PIN 5        // GPIO5 / D1 (Sensor de Vueltas - INTERRUPCIÓN) 
+#define SENSOR_IR_PIN 4     // GPIO4 / D2 (Sensor de Nivel de Comida)
+#define PUMP_PIN 13         // GPIO13 / D7
+#define MOTOR_PIN 15        // GPIO15 / D8
 
 // --- Operation Modes ---
 enum OperationMode {
@@ -48,11 +55,13 @@ bool initialTestDone = false;
 OperationMode currentMode = MODE_IDLE;
 int targetTurns = 0; 
 
+// Estado de la comida (LOW: OK / HIGH: Bajo, ajusta según tu sensor Omron)
+int foodLevelStatus = HIGH; 
+
 // --- Variables de Tiempo ---
 unsigned long dispenseStartTime = 0; 
 unsigned long lastTurnProcessingTime = 0; 
-// Duración de la dispensación de agua en milisegundos (3 segundos)
-const long WATER_DISPENSE_DURATION_MS = 3000; 
+unsigned long lastIRCheckTime = 0; // Para el chequeo no bloqueante del IR
 
 
 // --- Clients ---
@@ -237,7 +246,8 @@ void setup() {
   Serial.println("Starting...");
 
   // --- Pin Configuration ---
-  pinMode(SWITCH_PIN, INPUT_PULLUP);
+  pinMode(SWITCH_PIN, INPUT_PULLUP);      // Sensor de Vueltas (Interrupción)
+  pinMode(SENSOR_IR_PIN, INPUT_PULLUP);   // Sensor IR de Nivel (Lectura simple)
   pinMode(MOTOR_PIN, OUTPUT);
   pinMode(PUMP_PIN, OUTPUT); 
   digitalWrite(MOTOR_PIN, LOW); 
@@ -349,7 +359,7 @@ void loop() {
   }
 
   // --- Lógica del Motor (Comida) - Implementación de Rate Limiting No Bloqueante ---
-  // CORRECCIÓN: Usamos noInterrupts() para acceder a variables volátiles
+  // El código de conteo original se mantiene para evitar conflictos con el IR.
   if (switchTriggered && (millis() - lastTurnProcessingTime >= TURN_PROCESSING_DELAY_MS)) {
     
     // Proteger el acceso a la bandera volátil y asegurar la operación atómica
@@ -361,11 +371,9 @@ void loop() {
     if (shouldProcess) { // Procesar si la bandera estaba levantada
         lastTurnProcessingTime = millis(); // Registrar el tiempo de procesamiento
 
-        // NOTA: motorCounter se mantiene para el conteo total.
-        // Si el motor gira más rápido que 500ms, solo se procesa un evento cada 500ms.
         Serial.println("Turn detected. Counter = " + String(motorCounter));
 
-        // Publish state to backend (estas operaciones pueden ser lentas)
+        // Publish state to backend 
         String statusTopic = String(config.device_name) + "/status";
         client.publish(statusTopic.c_str(), ("Turn: " + String(motorCounter)).c_str());
 
@@ -390,8 +398,42 @@ void loop() {
             currentMode = MODE_IDLE;
             Serial.println("Dispenser stopped. Ration complete.");
             client.publish(statusTopic.c_str(), "RATION_COMPLETE");
+            
+            // Forzar chequeo de nivel de comida justo después de dispensar
+            lastIRCheckTime = 0; 
           }
         }
     }
+  }
+  
+  // --- LÓGICA DEL SENSOR IR PARA NIVEL DE COMIDA (D2/GPIO4) ---
+  // **Condición de tiempo modificada para que se chequee cada 5 segundos**
+  // Lo que comentaste para que "se ejecute siempre" no funciona en sistemas con temporización.
+  if (millis() - lastIRCheckTime >= IR_CHECK_INTERVAL_MS) { // Comprobar si han pasado 5 segundos
+    
+    // Leer el sensor IR (LOW en un Omron break-beam significa que el camino está bloqueado/comida)
+    int currentFoodLevel = digitalRead(SENSOR_IR_PIN); 
+    
+    Serial.print("IR Check: Pin D2 is ");
+    Serial.println(currentFoodLevel == HIGH ? "HIGH (Libre)" : "LOW (Bloqueado)");
+
+    // Solo publicar si el estado del nivel ha cambiado
+    if (currentFoodLevel != foodLevelStatus) {
+      foodLevelStatus = currentFoodLevel; // Actualizar el estado
+      
+      String statusTopic = String(config.device_name) + "/level";
+
+      if (foodLevelStatus == LOW) {
+        // LOW = Comida bloquea el sensor = OK
+        Serial.println("🟢 Nivel de comida: OK (Suficiente)");
+        client.publish(statusTopic.c_str(), "FOOD_LEVEL_OK");
+      } else {
+        // HIGH = Sensor libre = Poca comida
+        Serial.println("🔴 Nivel de comida: BAJO (Poca comida)");
+        client.publish(statusTopic.c_str(), "FOOD_LEVEL_LOW");
+      }
+    }
+    
+    lastIRCheckTime = millis(); // Reiniciar el temporizador
   }
 }

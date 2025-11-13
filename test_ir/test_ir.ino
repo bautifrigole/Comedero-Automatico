@@ -1,9 +1,9 @@
-#define SENSOR_PIN 5  // D1: Pin de salida del receptor IR
+#define SENSOR_PIN 12  // D6
 
 void setup() {
   Serial.begin(115200);
-  pinMode(SENSOR_PIN, INPUT_PULLUP); // Usa resistencia pull-up interna
-  Serial.println("Prueba sensor IR Omron break beam iniciada...");
+  pinMode(SENSOR_PIN, INPUT_PULLUP);
+  pinMode(LED_BUILTIN, OUTPUT);
 }
 
 void loop() {
@@ -11,9 +11,11 @@ void loop() {
 
   if (estado == LOW) {
     Serial.println("⚫ Objeto detectado");
+    digitalWrite(LED_BUILTIN, LOW);
   } else {
     Serial.println("⚪ Camino libre");
+    digitalWrite(LED_BUILTIN, HIGH);
   }
 
-  delay(500); // Actualiza cada medio segundo
+  delay(500);
 }

@@ -32,10 +32,11 @@ bool shouldSaveConfig = false;
 
 // --- Pins (ESP8266 D-Pins) ---
 // El pin 5 (D1) ya NO se usa para interrupciones, sino para el sensor IR.
-#define SENSOR_IR_PIN 5     // GPIO5 / D1 (Sensor de Nivel de Comida)
+#define SENSOR_IR_PIN 12     // GPIO12 / D6 (Sensor de Nivel de Comida)
 // Eliminamos SWITCH_PIN y SENSOR_IR_PIN en 4 para simplificar y reutilizar D1
 #define PUMP_PIN 13         // GPIO13 / D7
 #define MOTOR_PIN 15        // GPIO15 / D8
+#define BUTTON_PIN 0  // GPIO0 / D3 (Pulsador)
 
 // --- Operation Modes ---
 enum OperationMode {
@@ -237,9 +238,11 @@ void setup() {
   Serial.println("Starting...");
 
   // --- Pin Configuration ---
-  pinMode(SENSOR_IR_PIN, INPUT_PULLUP);   // Sensor IR de Nivel (Lectura simple)
+  pinMode(SENSOR_IR_PIN, INPUT);   // Sensor IR de Nivel (Lectura simple)
   pinMode(MOTOR_PIN, OUTPUT);
   pinMode(PUMP_PIN, OUTPUT); 
+  pinMode(BUTTON_PIN, INPUT_PULLUP); // Pulsador conectado a GND
+
   digitalWrite(MOTOR_PIN, LOW); 
   digitalWrite(PUMP_PIN, LOW);  
 
@@ -390,5 +393,22 @@ void loop() {
     }
     
     lastIRCheckTime = millis(); // Reiniciar el temporizador
+  }
+
+  // --- CONTROL MANUAL CON PULSADOR (D3 / GPIO0) ---
+  if (digitalRead(BUTTON_PIN) == LOW && currentMode == MODE_IDLE) {
+    Serial.println("🔘 Pulsador presionado - dispensando comida 10s");
+    currentMode = MODE_DISPENSE_FOOD;
+    dispenseStartTime = millis();
+    digitalWrite(MOTOR_PIN, HIGH);
+    motorRunning = true;
+    foodLevelCheckPending = false;
+  
+    // Publicar al broker (opcional)
+    String statusTopic = String(config.device_name) + "/status";
+    client.publish(statusTopic.c_str(), "DISPENSE_STARTED_BY_BUTTON");
+  
+    // Pequeño delay para evitar rebotes del pulsador
+    delay(500);
   }
 }

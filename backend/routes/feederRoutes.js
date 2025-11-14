@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { aedes } = require("../services/mqttService"); // Importamos el broker
+const { setDuration } = require("../services/configService");
 
 /**
  * Función helper para publicar mensajes MQTT y manejar la respuesta HTTP.
@@ -117,6 +118,35 @@ router.get("/devices", (req, res) => {
     connectedAt: new Date(client.conn.connectTime).toISOString(),
   }));
   res.json(clients);
+});
+
+/**
+ * Ruta: POST /api/set-duration
+ * Establece la duración de la ración en segundos.
+ * Espera un body: { "duration": 10 }
+ */
+router.post("/set-duration", (req, res) => {
+  const { duration } = req.body;
+
+  if (typeof duration !== 'number' || duration <= 0 || duration > 60) {
+    return res.status(400).json({ 
+      ok: false, 
+      error: "Invalid duration. Must be a number in seconds (e.g., 10), max 60." 
+    });
+  }
+
+  try {
+    const updatedDuration = setDuration(duration);
+    
+    res.status(200).json({ 
+      ok: true, 
+      message: `Ration duration set to ${updatedDuration} seconds.` 
+    });
+
+  } catch (err) {
+     console.error(`[API] Error en set-duration:`, err);
+     res.status(500).json({ ok: false, error: "Error updating config" });
+  }
 });
 
 module.exports = router;

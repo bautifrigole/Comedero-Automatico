@@ -1,33 +1,30 @@
 const express = require("express");
 const router = express.Router();
-const { getSchedule, setSchedule } = require("../services/scheduleService");
+const { getSchedule, setSchedule, getDuration } = require("../services/configService");
 
-// Obtener los horarios actuales (comida y agua)
 router.get("/schedule", (req, res) => {
-  const schedule = getSchedule(); // getSchedule() ahora retorna { feeding: [], water: [] }
-  res.json({ schedule });
+  const schedule = getSchedule();
+  const duration = getDuration();
+  res.json({
+    schedule: {feeding: schedule },
+    duration: duration
+  });
 });
 
-// Actualizar el horario (soporta { "feeding": ["HH:MM", ...], "water": ["HH:MM", ...] })
 router.post("/set-schedule", (req, res) => {
-  // Espera un body en formato JSON que puede contener 'feeding' y/o 'water'
-  const schedules = req.body;
+  const schedule = req.body.feeding;
 
-  // Validación básica: al menos un array debe estar presente para actualizar
-  if (
-    !schedules ||
-    (!Array.isArray(schedules.feeding) && !Array.isArray(schedules.water))
-  ) {
+  if (!schedule || !Array.isArray(schedule)) {
     return res
       .status(400)
-      .json({ error: "Body must contain array 'feeding' and/or 'water'." });
+      .json({ error: "Body must contain a 'feeding' array." });
   }
 
-  // setSchedule() maneja la actualización de ambos arrays
-  const updatedSchedule = setSchedule(schedules);
+  const updatedSchedule = setSchedule(schedule);
+  
   res.json({
     message: "Schedule updated succesfully",
-    schedule: updatedSchedule,
+    schedule: {feeding: updatedSchedule},
   });
 });
 

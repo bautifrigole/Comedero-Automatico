@@ -1,0 +1,9 @@
+{
+  "deviceName": "Feeder-01",
+  "feedingSchedule": [
+    "08:00",
+    "13:00",
+    "21:00"
+  ],
+  "rationDuration": 7
+}

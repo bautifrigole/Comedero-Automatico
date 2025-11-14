@@ -3,9 +3,9 @@
 "use client";
 
 // La URL original es para HTTP. La usaremos para las peticiones de la API.
-const backendHttpUrl = "http://192.168.1.42:8888";
+const backendHttpUrl = "http://192.168.50.41:8888";
 // La URL para la conexión MQTT por WebSockets.
-const backendWsUrl = "ws://192.168.1.42:8888";
+const backendWsUrl = "ws://192.168.50.41:8888";
 
 import { useState, useEffect } from "react";
 // Importar el nuevo componente

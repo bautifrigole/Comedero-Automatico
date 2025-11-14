@@ -3,7 +3,6 @@ const http = require("http");
 const cors = require("cors");
 const morgan = require("morgan");
 const { startBroker } = require("./services/mqttService");
-const { startScheduler } = require("./services/scheduleService");
 
 const feederRoutes = require("./routes/feederRoutes");
 const scheduleRoutes = require("./routes/scheduleRoutes");
@@ -21,7 +20,6 @@ app.use("/api/", feederRoutes);
 app.use("/api/", scheduleRoutes);
 
 startBroker(httpServer);
-startScheduler();
 
 // El servidor HTTP principal expondrá tanto la API como el broker MQTT por WebSockets
 httpServer.listen(mqttWSPort, () => {

@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Clock, Trash2, PlusCircle } from "lucide-react";
+import { Clock, Trash2, PlusCircle, Save } from "lucide-react";
 
 interface ScheduleManagerProps {
   backendUrl: string;
@@ -26,6 +26,7 @@ export default function ScheduleManager({ backendUrl }: ScheduleManagerProps) {
   const [newWaterTime, setNewWaterTime] = useState("");
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
+  const [duration, setDuration] = useState(""); // Duración en segundos
 
   const fetchSchedule = async () => {
     try {
@@ -34,6 +35,10 @@ export default function ScheduleManager({ backendUrl }: ScheduleManagerProps) {
       if (response.ok) {
         const data = await response.json();
         setSchedule(data.schedule);
+
+        if (data.duration) {
+          setDuration(String(data.duration)); 
+        }
       } else {
         setStatus("❌ Error al obtener el horario.");
       }
@@ -113,6 +118,35 @@ export default function ScheduleManager({ backendUrl }: ScheduleManagerProps) {
       }
     } catch (error) {
       setStatus("❌ No se pudo conectar a la API de horarios.");
+    } finally {
+      setLoading(false);
+      setTimeout(() => setStatus(""), 3000);
+    }
+  };
+
+  const handleSetDuration = async () => {
+    const durationNum = Number(duration);
+    if (isNaN(durationNum) || durationNum <= 0 || durationNum > 60) {
+      setStatus("❌ Duración inválida. Debe ser un número entre 1 y 60 segundos.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setStatus(`🔄 Estableciendo duración a ${durationNum}s...`);
+      const response = await fetch(`${backendUrl}/api/set-duration`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ duration: durationNum }),
+      });
+
+      if (response.ok) {
+        setStatus("✅ Duración de ración actualizada!");
+      } else {
+        setStatus("❌ Error al actualizar la duración.");
+      }
+    } catch (error) {
+      setStatus("❌ No se pudo conectar a la API.");
     } finally {
       setLoading(false);
       setTimeout(() => setStatus(""), 3000);
@@ -229,6 +263,33 @@ export default function ScheduleManager({ backendUrl }: ScheduleManagerProps) {
         <ScheduleBlock type="feeding" times={schedule.feeding} />
         {/* <ScheduleBlock type="water" times={schedule.water} /> */}
       </div>
+
+      <div className="rounded-lg border border-border p-4 shadow-sm bg-card">
+          <h3 className="text-lg font-semibold text-foreground mb-3">⏱️ Duración de Ración (segundos)</h3>
+          <div className="flex gap-2">
+            <input
+              type="number"
+              value={duration}
+              onChange={(e) => setDuration(e.target.value)}
+              disabled={loading}
+              className="flex h-10 w-[120px] rounded-md border border-input bg-card px-3 py-2 text-sm
+              placeholder:text-muted-foreground focus:ring-2 focus:ring-[var(--ring)] focus:border-blue-500 disabled:opacity-50"
+              min="1"
+              max="60"
+            />
+            <button
+              onClick={handleSetDuration}
+              disabled={loading || !duration}
+              className={cn(
+                "flex items-center gap-1 h-10 px-4 py-2 text-sm font-medium rounded-md text-white transition-colors disabled:opacity-50",
+                "bg-indigo-600 hover:bg-indigo-700" // Color primario
+              )}
+            >
+              <Save className="w-4 h-4" />
+              Guardar
+            </button>
+          </div>
+        </div>
     </div>
   );
 }

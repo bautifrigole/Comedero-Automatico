@@ -35,7 +35,7 @@ struct OpSettings {
   long gmtOffset;
 };
 OpSettings settings;
-const int SETTINGS_START = sizeof(Config) + 1; // Guardar después de la config principal
+const int SETTINGS_START = sizeof(Config);
 
 // --- ESTADOS DE OPERACIÓN ---
 enum OperationMode {
@@ -69,7 +69,7 @@ PubSubClient client(wifiClient);
 
 // Cargar config de Red
 void loadConfig() {
-  EEPROM.begin(sizeof(Config) + sizeof(OpSettings)); // Iniciar EEPROM
+  EEPROM.begin(sizeof(Config) + sizeof(OpSettings));
   EEPROM.get(CONFIG_START, config);
 
   if (config.mqtt_server[0] == 0xFF || config.mqtt_server[0] == 0) {
@@ -82,6 +82,7 @@ void loadConfig() {
     EEPROM.put(CONFIG_START, config);
     EEPROM.commit();
   }
+  EEPROM.end();
   Serial.println("Config de Red cargada.");
 }
 
@@ -98,16 +99,18 @@ void saveConfigCallback() {
 
 // Cargar Ajustes Operativos (ración, horarios)
 void loadSettings() {
+  EEPROM.begin(sizeof(Config) + sizeof(OpSettings));
   EEPROM.get(SETTINGS_START, settings);
 
   if (settings.foodDurationMs <= 0 || settings.foodDurationMs > 60000) {
     Serial.println("No hay settings operativos. Usando valores por defecto.");
-    settings.foodDurationMs = 10000; // 10 segundos
-    strcpy(settings.schedule, "08:00,14:00,20:00");
+    settings.foodDurationMs = 7000; // 7 segundos
+    strcpy(settings.schedule, "08:00,13:00,21:00");
     settings.gmtOffset = -3 * 3600; // GMT-3
     EEPROM.put(SETTINGS_START, settings);
     EEPROM.commit();
   }
+  EEPROM.end();
   
   // Cargar settings a variables globales
   foodDurationMs = settings.foodDurationMs;
@@ -116,12 +119,16 @@ void loadSettings() {
   // Parsear el string de horarios
   parseSchedule(String(settings.schedule));
   Serial.println("Settings operativos cargados.");
+  Serial.println(settings.schedule);
+  Serial.println(settings.foodDurationMs);
 }
 
 // Guardar Ajustes Operativos
 void saveSettings() {
+  EEPROM.begin(sizeof(Config) + sizeof(OpSettings));
   EEPROM.put(SETTINGS_START, settings);
   EEPROM.commit();
+  EEPROM.end();
   Serial.println("Settings operativos guardados en EEPROM.");
 }
 
@@ -446,53 +453,32 @@ void checkMotorStop() {
 }
 
 // --- 6. SETUP Y LOOP ---
-
-// Reset por resets rápidos
-bool checkForConfigReset() {
-  EEPROM.get(RESET_DATA_START, config.lastResetTime);
-  EEPROM.get(RESET_DATA_START + sizeof(unsigned long), config.resetCount);
-  
-  unsigned long currentTime = millis();
-  
-  if (currentTime > 10000 && (currentTime - config.lastResetTime) > 10000) {
-    config.resetCount = 0;
-  }
-  
-  config.resetCount++;
-  config.lastResetTime = currentTime;
-  
-  EEPROM.put(RESET_DATA_START, config.lastResetTime);
-  EEPROM.put(RESET_DATA_START + sizeof(unsigned long), config.resetCount);
-  EEPROM.commit();
-  
-  Serial.println("Reset #" + String(config.resetCount));
-  
-  if (config.resetCount >= 3) {
-    Serial.println("3 resets detectados - Iniciando portal de config");
-    config.resetCount = 0;
-    EEPROM.put(RESET_DATA_START + sizeof(unsigned long), config.resetCount);
-    EEPROM.commit();
-    return true;
-  }
-  return false;
-}
-
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n=== COMEDERO AUTOMÁTICO v2.0 (RTC) ===");
+  Serial.println("\n=== COMEDERO AUTOMÁTICO ===");
 
-  // Configurar Pines
+  // --- LÓGICA DE RESET (CORREGIDA) ---
+  // Configurar el botón PRIMERO
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  Serial.println("Iniciando en 3 segundos...");
+  Serial.println("MANTÉN PRESIONADO EL BOTÓN (D3) PARA BORRAR LA CONFIGURACIÓN.");
+  delay(3000); // 3 segundos para que presiones el botón
+
+  bool forceConfig = false;
+  if (digitalRead(BUTTON_PIN) == LOW) {
+    Serial.println("¡Botón presionado! Forzando borrado de fábrica...");
+    forceConfig = true;
+  }
+  // --- FIN LÓGICA DE RESET ---
+
+  // Configurar el resto de pines
   pinMode(SENSOR_IR_PIN, INPUT);
   pinMode(MOTOR_PIN, OUTPUT);
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
   digitalWrite(MOTOR_PIN, LOW);
 
   // Cargar configuraciones de EEPROM
   loadConfig();
   loadSettings();
-
-  // Chequear si forzamos el portal de configuración
-  bool forceConfig = checkForConfigReset();
 
   // --- WiFiManager ---
   WiFiManager wm;
@@ -507,21 +493,29 @@ void setup() {
   wm.addParameter(&custom_device_name);
   wm.setConfigPortalTimeout(180);
 
+  // --- ESTE BLOQUE AHORA SÍ FUNCIONARÁ ---
   if (forceConfig) {
-    Serial.println("Forzando portal de configuración...");
+    Serial.println("Borrando configuración de WiFi y EEPROM...");
     wm.resetSettings(); // Borra credenciales WiFi
-    // Borrar settings operativos también
+    
+    EEPROM.begin(sizeof(Config) + sizeof(OpSettings)); // Abrir EEPROM
+    
+    // Borrar settings operativos
     for (int i = 0; i < sizeof(OpSettings); i++) {
         EEPROM.write(SETTINGS_START + i, 0xFF); 
     }
-    EEPROM.commit();
+    // Borrar config de red
+    for (int i = 0; i < sizeof(Config); i++) {
+        EEPROM.write(CONFIG_START + i, 0xFF); 
+    }
+    EEPROM.commit(); // Guardar el borrado
+    EEPROM.end();    // Cerrar EEPROM
+    
+    loadConfig();   // Recargar valores por defecto
     loadSettings(); // Recargar valores por defecto
   }
 
   // --- MODO NO BLOQUEANTE ---
-  // autoConnect() es bloqueante, pero lo dejamos así para la configuración inicial.
-  // Para modo offline, el usuario puede saltar el portal o dejar que falle.
-  // IMPORTANTE: NO REINICIAMOS SI FALLA
   if (!wm.autoConnect("Feeder-Setup", "12345678")) {
     Serial.println("Portal falló o expiró. Iniciando en MODO OFFLINE.");
   }
@@ -537,8 +531,12 @@ void setup() {
       strcpy(config.mqtt_server, custom_mqtt_server.getValue());
       strcpy(config.mqtt_port, custom_mqtt_port.getValue());
       strcpy(config.device_name, custom_device_name.getValue());
+      
+      EEPROM.begin(sizeof(Config) + sizeof(OpSettings));
       EEPROM.put(CONFIG_START, config);
       EEPROM.commit();
+      EEPROM.end();
+      
       Serial.println("Config de red guardada desde el portal.");
     }
     

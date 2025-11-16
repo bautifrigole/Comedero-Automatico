@@ -8,7 +8,7 @@ const CONFIG_FILE_PATH = path.join(__dirname, '..', 'config.json');
 // Configuración por defecto si el archivo no existe
 const DEFAULT_CONFIG = {
   deviceName: "Feeder-01",
-  feedingSchedule: ["08:00", "14:00", "20:00"],
+  feedingSchedule: ["08:00", "13:00", "21:00"],
   rationDuration: 10 // Duración en segundos
 };
 
